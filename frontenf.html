@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COVID-19 CT scan classifier</title>
+<style>
+  :root {
+    --s1: 8px; --s2: 16px; --s3: 24px; --s4: 40px;
+    --bg: #e9eef0; --panel: #ffffff; --ink: #14212b; --muted: #44535e;
+    --rule: #b8c4cb; --accent: #0b5a6b; --accent-dark: #063c48;
+    --pos: #a3281c; --neg: #1d6b3a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 16px/1.5 "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    padding: var(--s4) var(--s3);
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 32px; line-height: 1.2; font-weight: 700; }
+  h2 { font-size: 20px; font-weight: 600; margin-bottom: var(--s2); }
+  .intro { max-width: 60ch; color: var(--muted); margin: var(--s1) 0 var(--s4); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: var(--s3); }
+  .viewport {
+    background: #000; border-radius: 2px; aspect-ratio: 1; width: 100%;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .viewport img { width: 100%; height: 100%; object-fit: contain; }
+  .viewport span { color: #c9d3d9; padding: var(--s2); text-align: center; }
+  .drop { cursor: pointer; display: block; }
+  .drop.over .viewport { outline: 3px solid var(--accent); outline-offset: 2px; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  input[type=file]:focus-visible + .viewport { outline: 3px solid var(--accent); outline-offset: 2px; }
+  button {
+    font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: 0; border-radius: 4px; padding: var(--s1) var(--s3); margin-top: var(--s2); cursor: pointer;
+  }
+  button:hover:enabled { background: var(--accent-dark); }
+  button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  button:disabled { background: #6f7f89; cursor: not-allowed; }
+  .verdict { font-size: 24px; font-weight: 700; line-height: 1.25; }
+  .verdict.pos { color: var(--pos); } .verdict.neg { color: var(--neg); }
+  .prob { font-size: 16px; margin-top: var(--s1); font-variant-numeric: tabular-nums; }
+  .bar { position: relative; height: 16px; background: #dde4e8; border-radius: 2px; margin: var(--s2) 0 var(--s1); }
+  .fill { height: 100%; background: var(--accent); border-radius: 2px 0 0 2px; width: 0; }
+  .tick { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
+  .small { font-size: 14px; color: var(--muted); }
+  .maps { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s1); margin-top: var(--s3); }
+  .maps figure { margin: 0; }
+  .maps figcaption { font-size: 14px; color: var(--muted); margin-top: var(--s1); }
+  .error { color: var(--pos); font-weight: 600; }
+  .note { margin-top: var(--s4); max-width: 70ch; color: var(--muted); font-size: 14px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>COVID-19 CT scan classifier</h1>
+  <p class="intro">Upload one chest CT slice. The model estimates the probability of a COVID-19 pattern and shows which regions of the lung drove that estimate.</p>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="scan-h">
+      <h2 id="scan-h">Scan</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/png,image/jpeg">
+        <div class="viewport" id="preview"><span>Drop a PNG or JPG here, or click to choose a file.</span></div>
+      </label>
+      <button id="go" disabled>Analyze scan</button>
+    </section>
+
+    <section class="panel" aria-labelledby="res-h" aria-live="polite">
+      <h2 id="res-h">Result</h2>
+      <div id="result"><p class="small">No result yet. Choose a scan and select Analyze scan.</p></div>
+    </section>
+  </div>
+
+  <p class="note">Research prototype, not a diagnostic tool. The model was trained on a single public dataset and has not been validated on other hospitals. A negative result does not rule out COVID-19. PCR testing and a clinician's assessment remain the standard.</p>
+</div>
+
+<script>
+  const API = "/predict";
+  const $ = (id) => document.getElementById(id);
+  const fileInput = $("file"), drop = $("drop"), preview = $("preview"), go = $("go"), result = $("result");
+  let current = null;
+
+  function setFile(f) {
+    if (!f || !f.type.startsWith("image/")) return;
+    current = f;
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(f);
+    img.alt = "Selected CT slice";
+    preview.replaceChildren(img);
+    go.disabled = false;
+    result.innerHTML = '<p class="small">Ready. Select Analyze scan.</p>';
+  }
+
+  fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+  ["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (ev) => setFile(ev.dataTransfer.files[0]));
+
+  go.addEventListener("click", async () => {
+    go.disabled = true; go.textContent = "Analyzing";
+    result.innerHTML = '<p class="small">Running the model.</p>';
+    try {
+      const form = new FormData();
+      form.append("file", current);
+      const res = await fetch(API, { method: "POST", body: form });
+      if (!res.ok) throw new Error("Server returned " + res.status);
+      render(await res.json());
+    } catch (err) {
+      result.innerHTML = '<p class="error">Could not get a result.</p><p class="small">Check that the model server is running at ' + API.replace("/predict", "") + ' (command: uvicorn app:app --port 8000). Details: ' + err.message + '</p>';
+    } finally {
+      go.disabled = false; go.textContent = "Analyze scan";
+    }
+  });
+
+  function render({ prob, threshold, heatmap }) {
+    const positive = prob >= threshold;
+    const pct = (prob * 100).toFixed(1);
+    result.innerHTML =
+      '<p class="verdict ' + (positive ? "pos" : "neg") + '">' + (positive ? "COVID-19 pattern detected" : "No COVID-19 pattern detected") + '</p>' +
+      '<p class="prob">Probability of COVID-19: ' + pct + '%</p>' +
+      '<div class="bar" role="img" aria-label="Probability ' + pct + ' percent, threshold ' + (threshold * 100).toFixed(0) + ' percent">' +
+        '<div class="fill" style="width:' + pct + '%"></div><div class="tick" style="left:' + threshold * 100 + '%"></div></div>' +
+      '<p class="small">Black marker: decision threshold at ' + (threshold * 100).toFixed(0) + '%.</p>' +
+      (heatmap ? '<div class="maps"><figure><div class="viewport"><img src="' + preview.querySelector("img").src + '" alt="Original slice"></div><figcaption>Original</figcaption></figure>' +
+        '<figure><div class="viewport"><img src="data:image/png;base64,' + heatmap + '" alt="Heatmap overlay"></div><figcaption>Regions the model used (red = strongest)</figcaption></figure></div>' : "");
+  }
+</script>
+</body>
+</html>

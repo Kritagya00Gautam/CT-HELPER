@@ -1,0 +1,4 @@
+GroupKFold
+U-net
+
+use u segmentation in our projecct of ausadhi
